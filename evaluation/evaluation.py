@@ -3,6 +3,7 @@ import time
 import itertools
 import numpy as np
 import pandas as pd
+from palmettopy.palmetto import Palmetto
 
 from sklearn.feature_extraction.text import CountVectorizer
 from typing import Mapping, Any, List, Tuple
@@ -155,15 +156,32 @@ class Trainer:
             for param, value in self.params.items()
         }
         new_params = list(itertools.product(*params.values()))
-        for param_combo in new_params:
 
+        mean_coherence_ca, mean_coherence_cp, mean_coherence_npmi = [], [], []
+        for param_combo in new_params:
             # Train and evaluate model
             params_to_use = {
                 param: value for param, value in zip(params_name, param_combo)
             }
             output, computation_time = self._train_tm_model(params_to_use)
-            scores = self.evaluate(output)
 
+            topnum = params_to_use['num_topics']
+            coherence_ca, coherence_cp, coherence_npmi = [], [], []
+            print(f'Topic Number is {topnum}')
+            for i, tops in enumerate(output['topics']):
+                palmetto = Palmetto(palmetto_uri="http://localhost:7777/service/", timeout=100)
+                print(f'TOPIC {i+1} are: {tops}')
+                coherence_ca.append(palmetto.get_coherence(tops, coherence_type="ca"))
+                coherence_cp.append(palmetto.get_coherence(tops, coherence_type="cp"))
+                coherence_npmi.append(palmetto.get_coherence(tops, coherence_type="npmi"))
+            scores = self.evaluate(output)
+            mean_ca, mean_cp, mean_npmi = np.mean(coherence_ca), np.mean(coherence_cp), np.mean(coherence_npmi)
+            print(f'Over {topnum} topics: ca is: {mean_ca}; Over all cp is: {mean_cp}; Over all npmi is: {mean_npmi}')
+            print(" ")
+            mean_coherence_ca.append(mean_ca)
+            mean_coherence_cp.append(mean_cp)
+            mean_coherence_npmi.append(mean_npmi)
+            
             # Update results
             result = {
                 "Dataset": self.dataset,
@@ -172,9 +190,14 @@ class Trainer:
                 "Params": params_to_use,
                 "Scores": scores,
                 "Computation Time": computation_time,
+                "Coherence ca": coherence_ca,
+                "Coherence cp": coherence_cp,
+                "Coherence npmi": coherence_npmi,
             }
             results.append(result)
 
+        print(f'Over all ca is: {np.mean(mean_coherence_ca)}; Over all cp is: {np.mean(mean_coherence_cp)}; Over all npmi is: {np.mean(mean_coherence_npmi)}')
+        
         if save:
             with open(f"{save}.json", "w") as f:
                 json.dump(results, f)
@@ -487,7 +510,6 @@ class Trainer:
                 print("============")
                 for metric, score in results.items():
                     print(f"{metric}: {str(score)}")
-                print(" ")
 
         return results
 
