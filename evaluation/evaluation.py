@@ -1,9 +1,12 @@
+import logging
 import json
 import time
 import itertools
 import numpy as np
 import pandas as pd
 from palmettopy.palmetto import Palmetto
+from collections import Counter
+import re
 
 from sklearn.feature_extraction.text import CountVectorizer
 from typing import Mapping, Any, List, Tuple
@@ -18,17 +21,16 @@ try:
 except ImportError:
     pass
 
-try:
-    from contextualized_topic_models.models.ctm import CombinedTM
-    from contextualized_topic_models.utils.data_preparation import (
-        TopicModelDataPreparation,
-    )
-    import nltk
+from contextualized_topic_models.models.ctm import CombinedTM
+from contextualized_topic_models.utils.data_preparation import (
+    TopicModelDataPreparation,
+)
+import nltk
 
-    nltk.download("stopwords")
-    from nltk.corpus import stopwords
-except ImportError:
-    pass
+# nltk.download(download_dir="/mnt/raid1/gzhou", info_or_id="stopwords")
+# nltk.download("stopwords", download_dir='/mnt/raid1/gzhou/anaconda3/envs/tm/nltk_data')
+nltk.download("stopwords")
+from nltk.corpus import stopwords
 
 from octis.models.ETM import ETM
 from octis.models.LDA import LDA
@@ -156,7 +158,8 @@ class Trainer:
             for param, value in self.params.items()
         }
         new_params = list(itertools.product(*params.values()))
-
+        
+        print('First 5 mode')
         mean_coherence_ca, mean_coherence_cp, mean_coherence_npmi = [], [], []
         for param_combo in new_params:
             # Train and evaluate model
@@ -165,41 +168,83 @@ class Trainer:
             }
             output, computation_time = self._train_tm_model(params_to_use)
 
-            topnum = params_to_use['num_topics']
-            coherence_ca, coherence_cp, coherence_npmi = [], [], []
+            topnum = 0
+            if self.model_name == 'malletLDA':
+                topnum = params_to_use['num_topics']
+            elif self.model_name == 'BERTopic' or self.model_name == 'Top2Vec':
+                topnum = params_to_use['nr_topics']
+            elif self.model_name == 'CTM_CUSTOM':
+                topnum = params_to_use['n_components']
+            coherence_ca, coherence_cp = [], []
             print(f'Topic Number is {topnum}')
-            for i, tops in enumerate(output['topics']):
-                palmetto = Palmetto(palmetto_uri="http://localhost:7777/service/", timeout=100)
-                print(f'TOPIC {i+1} are: {tops}')
-                coherence_ca.append(palmetto.get_coherence(tops, coherence_type="ca"))
+            all_topics = []
+            for tops in output['topics']:
+                all_topics.extend(tops)
+            whole_topics = Counter(all_topics)
+            final_candidates = []
+            palmetto = Palmetto(palmetto_uri="https://palmetto.demos.dice-research.org/service/", timeout=1000)
+            for tops in output['topics']:
+                temp = []
+                for item in tops:
+                    temp.append(1 / whole_topics[item])
+                final_candidates.append(1/len(tops) * sum(temp))
                 coherence_cp.append(palmetto.get_coherence(tops, coherence_type="cp"))
-                coherence_npmi.append(palmetto.get_coherence(tops, coherence_type="npmi"))
+                coherence_ca.append(palmetto.get_coherence(tops, coherence_type="ca"))
             scores = self.evaluate(output)
-            mean_ca, mean_cp, mean_npmi = np.mean(coherence_ca), np.mean(coherence_cp), np.mean(coherence_npmi)
-            print(f'Over {topnum} topics: ca is: {mean_ca}; Over all cp is: {mean_cp}; Over all npmi is: {mean_npmi}')
-            print(" ")
-            mean_coherence_ca.append(mean_ca)
-            mean_coherence_cp.append(mean_cp)
-            mean_coherence_npmi.append(mean_npmi)
-            
-            # Update results
-            result = {
-                "Dataset": self.dataset,
-                "Dataset Size": len(self.data.get_corpus()),
-                "Model": self.model_name,
-                "Params": params_to_use,
-                "Scores": scores,
-                "Computation Time": computation_time,
-                "Coherence ca": coherence_ca,
-                "Coherence cp": coherence_cp,
-                "Coherence npmi": coherence_npmi,
-            }
-            results.append(result)
+            # scores.update({"Topic Uniqueness": np.mean(final_candidates)})
+            mean_ca, mean_cp = np.mean(coherence_ca), np.mean(coherence_cp)
+            scores.update({"C_A": mean_ca})
+            scores.update({"C_P": mean_cp})
+            print(f'Score origin from OCTIS are: {scores}')
 
-        print(f'Over all ca is: {np.mean(mean_coherence_ca)}; Over all cp is: {np.mean(mean_coherence_cp)}; Over all npmi is: {np.mean(mean_coherence_npmi)}')
+            # Update results
+            if self.model_name == "Top2Vec" or self.model_name == "BERTopic":
+                print(f'Using model: {self.model_name}')
+                result = {
+                    "Dataset": self.dataset,
+                    "Dataset Size": len(self.data.get_corpus()),
+                    "Model": self.model_name,
+                    "Topic Numbers": params_to_use['nr_topics'],
+                    "Computation Time": computation_time,
+                    "Score Summary": scores,
+                    # "Coherence C_A": np.mean(coherence_ca),
+                    # "Coherence C_P": np.mean(coherence_cp),
+                    # "Coherence C_NPMI": np.mean(coherence_npmi),
+                }
+            elif self.model_name == "BERTopic":
+                print(f'Using model: {self.model_name}')
+                result = {
+                    "Dataset": self.dataset,
+                    "Dataset Size": len(self.data.get_corpus()),
+                    "Model": self.model_name,
+                    "Topic Numbers": params_to_use['nr_topics'],
+                    "Computation Time": computation_time,
+                    "Score Summary": scores,
+                }
+            elif self.model_name == "malletLDA":
+                print(f'Using model: {self.model_name}')
+                result = {
+                    "Dataset": self.dataset,
+                    "Dataset Size": len(self.data.get_corpus()),
+                    "Model": self.model_name,
+                    "Topic Numbers": params_to_use['num_topics'],
+                    "Computation Time": computation_time,
+                    "Score Summary": scores,
+                }
+            if self.model_name == "CTM_CUSTOM":
+                print(f'Using model: {self.model_name}')
+                result = {
+                    "Dataset": self.dataset,
+                    "Dataset Size": len(self.data.get_corpus()),
+                    "Model": self.model_name,
+                    "Topic Numbers": params_to_use['n_components'],
+                    "Computation Time": computation_time,
+                    "Score Summary": scores,
+                }
+            results.append(result)
         
         if save:
-            with open(f"{save}.json", "w") as f:
+            with open(f"{save}.json", "a+") as f:
                 json.dump(results, f)
 
             try:
@@ -223,20 +268,57 @@ class Trainer:
 
         # Train BERTopic
         elif self.model_name == "BERTopic":
+            print(f'Running the model: {self.model_name}')
             return self._train_bertopic(params)
 
         # Train Top2Vec
         elif self.model_name == "Top2Vec":
+            print(f'Running the model: {self.model_name}')
             return self._train_top2vec(params)
 
         # Train LDAseq
         elif self.model_name == "LDAseq":
             return self._train_ldaseq(params)
+        
+        # Train malletLDA
+        elif self.model_name == "malletLDA":
+            print(f'Running the model: {self.model_name}')
+            return self._train_malletlda(params)
 
         # Train OCTIS model
         octis_models = ["ETM", "LDA", "CTM", "NMF"]
         if self.model_name in octis_models:
+            print(f'Running the model: {self.model_name}')
             return self._train_octis_model(params)
+
+    def _train_malletlda(
+        self, params: Mapping[str, any]
+    ) -> Tuple[Mapping[str, Any], float]:
+        """Train mallet LDA model"""
+        data = self.data.get_corpus()
+        docs = [" ".join(words) for words in data]
+
+        data_words = list(sent_to_words(docs))
+        id2word = corpora.Dictionary(data_words)
+        corpus = [id2word.doc2bow(text) for text in data_words]
+
+        params["corpus"] = corpus
+        params["id2word"] = id2word
+        params["mallet_path"] = '/mnt/raid1/gzhou/mallet-2.0.8/bin/mallet' # update this path
+
+        start = time.time()
+        ldamallet = gensim.models.wrappers.LdaMallet(**params)
+        end = time.time()
+        computation_time = end - start
+
+        tops = ldamallet.print_topics()
+        tops = [ ' '.join(doc[1].split('+')) for doc in tops]
+        tops = [re.sub(u'[^a-zA-Z]+', ' ', sent) for sent in tops]
+        tops = [x.strip() for x in tops if x.strip()!='']
+        tops = [sent.split(' ') for sent in tops]
+
+        output_tm = {"topics": tops}
+        return output_tm, computation_time
 
     def _train_ldaseq(
         self, params: Mapping[str, any]
@@ -525,15 +607,30 @@ class Trainer:
 
     def get_metrics(self):
         """Prepare evaluation measures using OCTIS"""
+        cv = Coherence(texts=self.data.get_corpus(), topk=self.topk, measure="c_v")
+        uci = Coherence(texts=self.data.get_corpus(), topk=self.topk, measure="c_uci")
         npmi = Coherence(texts=self.data.get_corpus(), topk=self.topk, measure="c_npmi")
         topic_diversity = TopicDiversity(topk=self.topk)
 
         # Define methods
-        coherence = [(npmi, "npmi")]
+        coherence_cv = [(cv, "cv")]
+        coherence_npmi = [(npmi, "npmi")]
+        coherence_uci = [(uci, "uci")]
         diversity = [(topic_diversity, "diversity")]
-        metrics = [(coherence, "Coherence"), (diversity, "Diversity")]
+        metrics = [(coherence_cv, "Coherence_cv"), (coherence_npmi, "Coherence_npmi"), 
+                   (coherence_uci, "Coherence_uci"), (diversity, "Topic Diversity")]
 
         return metrics
+        # """Prepare evaluation measures using OCTIS"""
+        # npmi = Coherence(texts=self.data.get_corpus(), topk=self.topk, measure="c_npmi")
+        # topic_diversity = TopicDiversity(topk=self.topk)
+
+        # # Define methods
+        # coherence = [(npmi, "npmi")]
+        # diversity = [(topic_diversity, "diversity")]
+        # metrics = [(coherence, "Coherence"), (diversity, "Diversity")]
+
+        # return metrics
 
 
 def sent_to_words(sentences):
