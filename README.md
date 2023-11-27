@@ -1,5 +1,13 @@
-The code and results for the experiments in [BERTopic: Neural topic modeling with a class-based TF-IDF procedure](http://arxiv.org/abs/2203.05794). 
-The results for Table 1 and 2 can be found in `results/Basic/`. The results for Table 3 can be found in `results/Dynamic Topic Modeling`. 
+# Environment
+```
+conda activate tmeva
+cd notebooks
+mkdir extension_results
+```
 
+# Usage
 To run the experiments, you can follow along with the tutorial in `notebooks/Evaluation.ipynb`. 
-To visualize the results from the paper, use `notebooks/Results.ipynb`. 
+
+# Notes
+1. Pameltto may throw timeout or other exceptions, please install a local version using [docker](https://github.com/dice-group/Palmetto).
+2. malletLDA needs installed first, please check its [repository](https://mimno.github.io/Mallet/).
